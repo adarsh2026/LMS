@@ -1,371 +1,339 @@
-from flask import Flask, render_template, request, jsonify
-import psycopg2
-from datetime import datetime
-
-app = Flask(__name__)
-
-# DATABASE CONNECTION
-def connect_db():
-    return psycopg2.connect(
-        host="localhost",
-        database="library_db",
-        user="postgres",
-        password="Admin123",
-        port="5432"
-    )
+import tornado.ioloop
+import tornado.web
+from db import connect_db
 
 
-# HOME
-@app.route("/")
-def home():
-    return render_template("index.html")
+# ---------------- BASE HANDLER ----------------
+
+class BaseHandler(tornado.web.RequestHandler):
+
+    def get_current_user(self):
+        return self.get_secure_cookie("user")
+
+    def get_current_role(self):
+        role = self.get_secure_cookie("role")
+        if role:
+            return role.decode()
+        return None
 
 
-# ADMIN LOGIN
-@app.route("/auth/login", methods=["POST"])
-def admin_login():
+# ---------------- LOGIN ----------------
 
-    try:
+class LoginHandler(BaseHandler):
 
-        data = request.json
+    def get(self):
+        self.render("login.html")
 
-        if not data:
-            return jsonify({
-                "status":"error",
-                "message":"No data received"
-            })
+    async def post(self):
 
-        admin_id = data.get("id")
-        password = data.get("password")
+        username = self.get_argument("username")
+        password = self.get_argument("password")
 
-        conn = connect_db()
-        cur = conn.cursor()
+        conn = await connect_db()
 
-        cur.execute(
-            "SELECT id FROM public.admins WHERE id=%s AND password=%s",
-            (admin_id,password)
+        if not conn:
+            self.write("Database Error")
+            return
+
+        admin = await conn.fetchrow(
+            "SELECT * FROM admins WHERE username=$1 AND password=$2",
+            username, password
         )
-
-        admin = cur.fetchone()
-
-        cur.close()
-        conn.close()
 
         if admin:
-            return jsonify({
-                "status":"success",
-                "message":"Login successful"
-            })
-        else:
-            return jsonify({
-                "status":"error",
-                "message":"Invalid ID or Password"
-            })
+            self.set_secure_cookie("user", username)
+            self.set_secure_cookie("role", "admin")
+            self.redirect("/admin")
+            return
 
-    except Exception as e:
-
-        print("LOGIN ERROR:",e)
-
-        return jsonify({
-            "status":"error",
-            "message":"Server error"
-        })
-
-
-# ADD BOOK
-@app.route("/books/add", methods=["POST"])
-def add_book():
-
-    try:
-
-        data = request.json
-
-        conn = connect_db()
-        cur = conn.cursor()
-
-        cur.execute(
-            """
-            INSERT INTO public.books (id,title,author,total,available)
-            VALUES (%s,%s,%s,%s,%s)
-            """,
-            (
-                data["id"],
-                data["title"],
-                data["author"],
-                data["total"],
-                data["total"]
-            )
+        student = await conn.fetchrow(
+            "SELECT * FROM students WHERE student_id=$1 AND password=$2",
+            username, password
         )
 
-        conn.commit()
+        if student:
+            self.set_secure_cookie("user", username)
+            self.set_secure_cookie("role", "student")
+            self.redirect("/student")
+            return
 
-        cur.close()
-        conn.close()
-
-        return jsonify({"message":"Book added"})
-
-    except Exception as e:
-        print("BOOK ERROR:",e)
-        return jsonify({"message":"Error adding book"})
+        self.write("Invalid Login")
 
 
-# LIST BOOKS
-@app.route("/books/list")
-def list_books():
+# ---------------- LOGOUT ----------------
 
-    conn = connect_db()
-    cur = conn.cursor()
+class LogoutHandler(BaseHandler):
 
-    cur.execute("SELECT * FROM public.books")
-
-    rows = cur.fetchall()
-
-    books = []
-
-    for r in rows:
-        books.append({
-            "id":r[0],
-            "title":r[1],
-            "author":r[2],
-            "total":r[3],
-            "available":r[4]
-        })
-
-    cur.close()
-    conn.close()
-
-    return jsonify(books)
+    def get(self):
+        self.clear_cookie("user")
+        self.clear_cookie("role")
+        self.redirect("/")
 
 
-# DELETE BOOK
-@app.route("/books/delete/<id>", methods=["DELETE"])
-def delete_book(id):
+# ---------------- ADMIN DASHBOARD ----------------
 
-    conn = connect_db()
-    cur = conn.cursor()
+class AdminDashboardHandler(BaseHandler):
 
-    cur.execute("DELETE FROM public.books WHERE id=%s",(id,))
+    @tornado.web.authenticated
+    async def get(self):
 
-    conn.commit()
+        if self.get_current_role() != "admin":
+            self.redirect("/")
+            return
 
-    cur.close()
-    conn.close()
+        data_type = self.get_argument("type", "")
 
-    return jsonify({"message":"Book deleted"})
+        conn = await connect_db()
 
+        total_books = await conn.fetchval("SELECT COUNT(*) FROM books")
+        total_students = await conn.fetchval("SELECT COUNT(*) FROM students")
+        issued_books = await conn.fetchval("SELECT COUNT(*) FROM issued_books")
+        available_books = await conn.fetchval("SELECT COALESCE(SUM(quantity),0) FROM books")
 
-# ADD STUDENT
-@app.route("/students/add", methods=["POST"])
-def add_student():
+        data = []
 
-    try:
+        if data_type == "books":
 
-        data = request.json
+            data = await conn.fetch("""
+            SELECT id,book_code,book_name,author,quantity
+            FROM books
+            ORDER BY id
+            """)
 
-        conn = connect_db()
-        cur = conn.cursor()
+        elif data_type == "students":
 
-        cur.execute(
-            """
-            INSERT INTO public.students (id,name,course)
-            VALUES (%s,%s,%s)
-            """,
-            (
-                data["id"],
-                data["name"],
-                data["course"]
-            )
+            data = await conn.fetch("""
+            SELECT student_id,name,course
+            FROM students
+            ORDER BY student_id
+            """)
+
+        elif data_type == "history":
+
+            data = await conn.fetch("""
+            SELECT student_id,book_code,issue_date,return_date
+            FROM issued_books
+            ORDER BY issue_date DESC
+            """)
+
+        self.render(
+            "admin_dashboard.html",
+            total_books=total_books,
+            total_students=total_students,
+            issued_books=issued_books,
+            available_books=available_books,
+            data=data,
+            type=data_type
         )
 
-        conn.commit()
 
-        cur.close()
-        conn.close()
+# ---------------- ADD BOOK ----------------
 
-        return jsonify({"message":"Student added"})
+class BooksHandler(BaseHandler):
 
-    except Exception as e:
-        print("STUDENT ERROR:",e)
-        return jsonify({"message":"Error adding student"})
+    @tornado.web.authenticated
+    def get(self):
 
+        if self.get_current_role() != "admin":
+            self.redirect("/")
+            return
 
-# LIST STUDENTS
-@app.route("/students/list")
-def list_students():
+        self.render("add_book.html")
 
-    conn = connect_db()
-    cur = conn.cursor()
+    async def post(self):
 
-    cur.execute("SELECT * FROM public.students")
+        book_code = self.get_argument("book_code")
+        book_name = self.get_argument("book_name")
+        author = self.get_argument("author")
+        quantity = self.get_argument("quantity")
 
-    rows = cur.fetchall()
+        conn = await connect_db()
 
-    students = []
+        await conn.execute("""
+        INSERT INTO books(book_code,book_name,author,quantity)
+        VALUES($1,$2,$3,$4)
+        """, book_code, book_name, author, quantity)
 
-    for r in rows:
-        students.append({
-            "id":r[0],
-            "name":r[1],
-            "course":r[2]
-        })
-
-    cur.close()
-    conn.close()
-
-    return jsonify(students)
+        self.redirect("/admin?type=books")
 
 
-# DELETE STUDENT
-@app.route("/students/delete/<id>", methods=["DELETE"])
-def delete_student(id):
+# ---------------- ADD STUDENT ----------------
 
-    conn = connect_db()
-    cur = conn.cursor()
+class StudentsHandler(BaseHandler):
 
-    cur.execute("DELETE FROM public.students WHERE id=%s",(id,))
+    @tornado.web.authenticated
+    def get(self):
 
-    conn.commit()
+        if self.get_current_role() != "admin":
+            self.redirect("/")
+            return
 
-    cur.close()
-    conn.close()
+        self.render("add_student.html")
 
-    return jsonify({"message":"Student deleted"})
+    async def post(self):
+
+        student_id = self.get_argument("student_id")
+        password = self.get_argument("password")
+        name = self.get_argument("name")
+        course = self.get_argument("course")
+
+        conn = await connect_db()
+
+        await conn.execute("""
+        INSERT INTO students(student_id,password,name,course)
+        VALUES($1,$2,$3,$4)
+        """, student_id, password, name, course)
+
+        self.redirect("/admin?type=students")
 
 
-# ISSUE BOOK
-@app.route("/issue", methods=["POST"])
-def issue_book():
+# ---------------- ISSUE BOOK ----------------
 
-    data = request.json
-    book_id = data["book_id"]
-    student_id = data["student_id"]
+class IssueBookHandler(BaseHandler):
 
-    conn = connect_db()
-    cur = conn.cursor()
+    @tornado.web.authenticated
+    async def get(self):
 
-    cur.execute("SELECT id FROM public.students WHERE id=%s",(student_id,))
-    student = cur.fetchone()
+        if self.get_current_role() != "student":
+            self.redirect("/")
+            return
 
-    if not student:
-        cur.close()
-        conn.close()
-        return jsonify({"message":"Student not found"})
+        conn = await connect_db()
 
-    cur.execute("SELECT available FROM public.books WHERE id=%s",(book_id,))
-    book = cur.fetchone()
+        books = await conn.fetch(
+            "SELECT book_code,book_name FROM books WHERE quantity > 0"
+        )
 
-    if not book:
-        cur.close()
-        conn.close()
-        return jsonify({"message":"Book not found"})
+        self.render("issue_book.html", books=books)
 
-    if book[0] <= 0:
-        cur.close()
-        conn.close()
-        return jsonify({"message":"Book not available"})
+    async def post(self):
 
-    cur.execute(
-        "UPDATE public.books SET available=available-1 WHERE id=%s",
-        (book_id,)
+        student_id = self.get_secure_cookie("user").decode()
+        book_code = self.get_argument("book_code")
+
+        conn = await connect_db()
+
+        await conn.execute("""
+        INSERT INTO issued_books(student_id,book_code,issue_date)
+        VALUES($1,$2,CURRENT_DATE)
+        """, student_id, book_code)
+
+        await conn.execute("""
+        UPDATE books
+        SET quantity = quantity - 1
+        WHERE book_code=$1
+        """, book_code)
+
+        self.redirect("/student")
+
+
+# ---------------- RETURN BOOK ----------------
+
+class ReturnBookHandler(BaseHandler):
+
+    @tornado.web.authenticated
+    async def get(self):
+
+        if self.get_current_role() != "student":
+            self.redirect("/")
+            return
+
+        student_id = self.get_secure_cookie("user").decode()
+
+        conn = await connect_db()
+
+        books = await conn.fetch("""
+        SELECT book_code
+        FROM issued_books
+        WHERE student_id=$1 AND return_date IS NULL
+        """, student_id)
+
+        self.render("return_book.html", books=books)
+
+    async def post(self):
+
+        student_id = self.get_secure_cookie("user").decode()
+        book_code = self.get_argument("book_code")
+
+        conn = await connect_db()
+
+        await conn.execute("""
+        UPDATE issued_books
+        SET return_date = CURRENT_DATE
+        WHERE student_id=$1 AND book_code=$2
+        """, student_id, book_code)
+
+        await conn.execute("""
+        UPDATE books
+        SET quantity = quantity + 1
+        WHERE book_code=$1
+        """, book_code)
+
+        self.redirect("/student")
+
+
+# ---------------- STUDENT DASHBOARD ----------------
+
+class StudentDashboardHandler(BaseHandler):
+
+    @tornado.web.authenticated
+    async def get(self):
+
+        if self.get_current_role() != "student":
+            self.redirect("/")
+            return
+
+        conn = await connect_db()
+
+        books = await conn.fetch("""
+        SELECT id,book_code,book_name,author,quantity
+        FROM books
+        ORDER BY id
+        """)
+
+        self.render("student_dashboard.html", books=books)
+
+
+# ---------------- APPLICATION ----------------
+
+def make_app():
+
+    return tornado.web.Application(
+
+        [
+
+            (r"/", LoginHandler),
+            (r"/logout", LogoutHandler),
+
+            (r"/admin", AdminDashboardHandler),
+            (r"/student", StudentDashboardHandler),
+
+            (r"/books", BooksHandler),
+            (r"/students", StudentsHandler),
+
+            (r"/issue", IssueBookHandler),
+            (r"/return", ReturnBookHandler),
+
+        ],
+
+        template_path="templates",
+        static_path="static",
+
+        cookie_secret="library_secret_key",
+        login_url="/",
+
+        debug=True
     )
 
-    cur.execute(
-        """
-        INSERT INTO public.transactions
-        (book_id,student_id,action,time)
-        VALUES (%s,%s,%s,%s)
-        """,
-        (book_id,student_id,"issue",datetime.now())
-    )
 
-    conn.commit()
+# ---------------- RUN SERVER ----------------
 
-    cur.close()
-    conn.close()
-
-    return jsonify({"message":"Book issued"})
-
-
-# RETURN BOOK
-@app.route("/return", methods=["POST"])
-def return_book():
-
-    data = request.json
-    book_id = data["book_id"]
-    student_id = data["student_id"]
-
-    conn = connect_db()
-    cur = conn.cursor()
-
-    cur.execute(
-        "UPDATE public.books SET available=available+1 WHERE id=%s",
-        (book_id,)
-    )
-
-    cur.execute(
-        """
-        INSERT INTO public.transactions
-        (book_id,student_id,action,time)
-        VALUES (%s,%s,%s,%s)
-        """,
-        (book_id,student_id,"return",datetime.now())
-    )
-
-    conn.commit()
-
-    cur.close()
-    conn.close()
-
-    return jsonify({"message":"Book returned"})
-
-
-# LIST TRANSACTIONS
-@app.route("/transactions/list")
-def transactions():
-
-    conn = connect_db()
-    cur = conn.cursor()
-
-    cur.execute(
-        "SELECT id,book_id,student_id,action,time FROM public.transactions"
-    )
-
-    rows = cur.fetchall()
-
-    data=[]
-
-    for r in rows:
-        data.append({
-            "id":r[0],
-            "book_id":r[1],
-            "student_id":r[2],
-            "action":r[3],
-           "time": r[4].strftime("%Y-%m-%d %H:%M:%S")
-        })
-
-    cur.close()
-    conn.close()
-
-    return jsonify(data)
-
-
-# DELETE TRANSACTION
-@app.route("/transactions/delete/<int:id>", methods=["DELETE"])
-def delete_transaction(id):
-
-    conn = connect_db()
-    cur = conn.cursor()
-
-    cur.execute("DELETE FROM public.transactions WHERE id=%s",(id,))
-
-    conn.commit()
-
-    cur.close()
-    conn.close()
-
-    return jsonify({"message":"Transaction deleted"})
-
-
-# RUN SERVER
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+
+    app = make_app()
+
+    app.listen(8888)
+
+    print("Server Running : http://localhost:8888")
+
+    tornado.ioloop.IOLoop.current().start()
