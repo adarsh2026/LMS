@@ -118,7 +118,8 @@ class BooksHandler(BaseHandler):
             return
         self.render("add_book.html")
 
-    async def post(self):
+async def post(self):
+
 
         async with self.settings['pool'].acquire() as conn:
             async with conn.transaction():
