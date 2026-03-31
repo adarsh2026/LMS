@@ -1,294 +1,258 @@
-document.addEventListener("DOMContentLoaded", () => {
+$(document).ready(function () {
 
-const loginScreen = document.getElementById("loginScreen")
-const adminLoginBtn = document.getElementById("adminLoginBtn")
-const adminCloseBtn = document.getElementById("adminCloseBtn")
-const adminLogoutBtn = document.getElementById("adminLogoutBtn")
-const loginForm = document.getElementById("loginForm")
+    const $loginScreen = $("#loginScreen")
+    const $adminLoginBtn = $("#adminLoginBtn")
+    const $adminCloseBtn = $("#adminCloseBtn")
+    const $adminLogoutBtn = $("#adminLogoutBtn")
+    const $loginForm = $("#loginForm")
 
-adminLoginBtn.onclick = () => loginScreen.classList.remove("d-none")
-adminCloseBtn.onclick = () => loginScreen.classList.add("d-none")
+    // ---------------- LOGIN UI ----------------
 
-loginForm.addEventListener("submit", async (e)=>{
+    $adminLoginBtn.click(() => $loginScreen.removeClass("d-none"))
+    $adminCloseBtn.click(() => $loginScreen.addClass("d-none"))
 
-e.preventDefault()
+    $loginForm.submit(async function (e) {
+        e.preventDefault()
 
-const id = document.getElementById("loginId").value
-const password = document.getElementById("loginPassword").value
+        const id = $("#loginId").val()
+        const password = $("#loginPassword").val()
 
-const res = await fetch("/auth/login",{
-method:"POST",
-headers:{"Content-Type":"application/json"},
-body:JSON.stringify({id,password})
-})
+        const res = await fetch("/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id, password })
+        })
 
-const data = await res.json()
+        const data = await res.json()
 
-if(data.status==="success"){
+        if (data.status === "success") {
 
-alert("Admin Login Successful")
+            alert("Admin Login Successful")
 
-loginScreen.classList.add("d-none")
+            $loginScreen.addClass("d-none")
+            $adminLoginBtn.addClass("d-none")
+            $adminLogoutBtn.removeClass("d-none")
 
-adminLoginBtn.classList.add("d-none")
-adminLogoutBtn.classList.remove("d-none")
+            $(".admin-only").removeClass("d-none")
 
-document.querySelectorAll(".admin-only").forEach(el=>{
-el.classList.remove("d-none")
-})
+        } else {
+            alert(data.message)
+        }
+    })
 
-}else{
-alert(data.message)
-}
+    $adminLogoutBtn.click(() => {
+        $adminLoginBtn.removeClass("d-none")
+        $adminLogoutBtn.addClass("d-none")
+        $(".admin-only").addClass("d-none")
+        alert("Logged out")
+    })
 
-})
+    // ---------------- SIDEBAR ----------------
 
+    $(".sidebar-link").click(function () {
+        $(".sidebar-link").removeClass("active")
+        $(this).addClass("active")
 
-adminLogoutBtn.onclick=()=>{
+        const target = $(this).data("target")
 
-adminLoginBtn.classList.remove("d-none")
-adminLogoutBtn.classList.add("d-none")
+        $(".tab-pane-custom").addClass("d-none")
+        $("#" + target).removeClass("d-none")
+    })
 
-document.querySelectorAll(".admin-only").forEach(el=>{
-el.classList.add("d-none")
-})
+    // ---------------- BOOKS ----------------
 
-alert("Logged out")
+    window.loadBooks = async function () {
 
-}
+        const res = await fetch("/books/list")
+        const data = await res.json()
 
+        const $table = $("#booksTableBody")
+        $table.html("")
 
-const sidebarLinks=document.querySelectorAll(".sidebar-link")
-const tabs=document.querySelectorAll(".tab-pane-custom")
+        let available = 0
 
-sidebarLinks.forEach(link=>{
-link.onclick=()=>{
-sidebarLinks.forEach(l=>l.classList.remove("active"))
-link.classList.add("active")
+        data.forEach(book => {
 
-const target=link.getAttribute("data-target")
+            available += book.available
 
-tabs.forEach(tab=>tab.classList.add("d-none"))
+            $table.append(`
+                <tr>
+                    <td>${book.id}</td>
+                    <td>${book.title}</td>
+                    <td>${book.author}</td>
+                    <td>${book.total}</td>
+                    <td>${book.available}</td>
+                    <td class="admin-only d-none">
+                        <button class="btn btn-danger btn-sm delete-book" data-id="${book.id}">Delete</button>
+                    </td>
+                </tr>
+            `)
+        })
 
-document.getElementById(target).classList.remove("d-none")
-}
-})
+        $("#statTotalBooks").text(data.length)
+        $("#statAvailable").text(available)
+    }
 
+    $(document).on("click", ".delete-book", async function () {
+        const id = $(this).data("id")
 
-window.loadBooks = async function(){
+        if (!confirm("Delete book?")) return
 
-const res = await fetch("/books/list")
-const data = await res.json()
+        await fetch("/books/delete/" + id, { method: "DELETE" })
+        loadBooks()
+    })
 
-const table=document.getElementById("booksTableBody")
+    window.addBook = async function () {
 
-table.innerHTML=""
+        const id = $("#bookId").val()
+        const title = $("#bookTitle").val()
+        const author = $("#bookAuthor").val()
+        const total = $("#bookTotal").val()
 
-let available=0
+        const res = await fetch("/books/add", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id, title, author, total })
+        })
 
-data.forEach(book=>{
+        const data = await res.json()
+        alert(data.message)
 
-available+=book.available
+        loadBooks()
+    }
 
-table.innerHTML+=`
-<tr>
-<td>${book.id}</td>
-<td>${book.title}</td>
-<td>${book.author}</td>
-<td>${book.total}</td>
-<td>${book.available}</td>
-<td class="admin-only d-none">
-<button class="btn btn-danger btn-sm" onclick="deleteBook('${book.id}')">Delete</button>
-</td>
-</tr>
-`
-})
+    // ---------------- STUDENTS ----------------
 
-document.getElementById("statTotalBooks").textContent=data.length
-document.getElementById("statAvailable").textContent=available
+    window.loadStudents = async function () {
 
-}
+        const res = await fetch("/students/list")
+        const data = await res.json()
 
+        const $table = $("#studentsTableBody2")
+        $table.html("")
 
-window.addBook = async function(){
+        data.forEach(student => {
+            $table.append(`
+                <tr>
+                    <td>${student.id}</td>
+                    <td>${student.name}</td>
+                    <td>${student.course}</td>
+                    <td class="admin-only d-none">
+                        <button class="btn btn-danger btn-sm delete-student" data-id="${student.id}">Delete</button>
+                    </td>
+                </tr>
+            `)
+        })
 
-const id=document.getElementById("bookId").value
-const title=document.getElementById("bookTitle").value
-const author=document.getElementById("bookAuthor").value
-const total=document.getElementById("bookTotal").value
+        $("#statStudents").text(data.length)
+    }
 
-const res=await fetch("/books/add",{
-method:"POST",
-headers:{"Content-Type":"application/json"},
-body:JSON.stringify({id,title,author,total})
-})
+    $(document).on("click", ".delete-student", async function () {
+        const id = $(this).data("id")
 
-const data=await res.json()
+        if (!confirm("Delete student?")) return
 
-alert(data.message)
+        await fetch("/students/delete/" + id, { method: "DELETE" })
+        loadStudents()
+    })
 
-loadBooks()
+    window.addStudent = async function () {
 
-}
+        const id = $("#studentId").val()
+        const name = $("#studentName").val()
+        const course = $("#studentCourse").val()
 
+        const res = await fetch("/students/add", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id, name, course })
+        })
 
-window.deleteBook = async function(id){
+        const data = await res.json()
+        alert(data.message)
 
-if(!confirm("Delete book?")) return
+        loadStudents()
+    }
 
-await fetch("/books/delete/"+id,{method:"DELETE"})
+    // ---------------- ISSUE / RETURN ----------------
 
-loadBooks()
+    window.issueBook = async function () {
 
-}
+        const book_id = $("#issueBookId").val()
+        const student_id = $("#issueStudentId").val()
 
+        const res = await fetch("/issue", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ book_id, student_id })
+        })
 
-window.loadStudents = async function(){
+        const data = await res.json()
+        alert(data.message)
 
-const res=await fetch("/students/list")
-const data=await res.json()
+        loadBooks()
+        loadTransactions()
+    }
 
-const table=document.getElementById("studentsTableBody2")
+    window.returnBook = async function () {
 
-table.innerHTML=""
+        const book_id = $("#returnBookId").val()
+        const student_id = $("#returnStudentId").val()
 
-data.forEach(student=>{
+        const res = await fetch("/return", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ book_id, student_id })
+        })
 
-table.innerHTML+=`
-<tr>
-<td>${student.id}</td>
-<td>${student.name}</td>
-<td>${student.course}</td>
-<td class="admin-only d-none">
-<button class="btn btn-danger btn-sm" onclick="deleteStudent('${student.id}')">Delete</button>
-</td>
-</tr>
-`
+        const data = await res.json()
+        alert(data.message)
 
-})
+        loadBooks()
+        loadTransactions()
+    }
 
-document.getElementById("statStudents").textContent=data.length
+    // ---------------- TRANSACTIONS ----------------
 
-}
+    window.loadTransactions = async function () {
 
+        const res = await fetch("/transactions/list")
+        const data = await res.json()
 
-window.addStudent = async function(){
+        const $table = $("#transactionsTableBody")
+        $table.html("")
 
-const id=document.getElementById("studentId").value
-const name=document.getElementById("studentName").value
-const course=document.getElementById("studentCourse").value
+        data.forEach((t, index) => {
+            $table.append(`
+                <tr>
+                    <td>${index + 1}</td>
+                    <td>${t.book_id}</td>
+                    <td>${t.student_id}</td>
+                    <td>${t.action}</td>
+                    <td>${t.time}</td>
+                    <td class="admin-only d-none">
+                        <button class="btn btn-danger btn-sm delete-transaction" data-id="${t.id}">Delete</button>
+                    </td>
+                </tr>
+            `)
+        })
 
-const res=await fetch("/students/add",{
-method:"POST",
-headers:{"Content-Type":"application/json"},
-body:JSON.stringify({id,name,course})
-})
+        $("#statTransactions").text(data.length)
+    }
 
-const data=await res.json()
+    $(document).on("click", ".delete-transaction", async function () {
+        const id = $(this).data("id")
 
-alert(data.message)
+        if (!confirm("Delete transaction?")) return
 
-loadStudents()
+        await fetch("/transactions/delete/" + id, { method: "DELETE" })
+        loadTransactions()
+    })
 
-}
+    // ---------------- INITIAL LOAD ----------------
 
-
-window.deleteStudent = async function(id){
-
-if(!confirm("Delete student?")) return
-
-await fetch("/students/delete/"+id,{method:"DELETE"})
-
-loadStudents()
-
-}
-
-
-window.issueBook = async function(){
-
-const book_id=document.getElementById("issueBookId").value
-const student_id=document.getElementById("issueStudentId").value
-
-const res=await fetch("/issue",{
-method:"POST",
-headers:{"Content-Type":"application/json"},
-body:JSON.stringify({book_id,student_id})
-})
-
-const data=await res.json()
-
-alert(data.message)
-
-loadBooks()
-loadTransactions()
-
-}
-
-
-window.returnBook = async function(){
-
-const book_id=document.getElementById("returnBookId").value
-const student_id=document.getElementById("returnStudentId").value
-
-const res=await fetch("/return",{
-method:"POST",
-headers:{"Content-Type":"application/json"},
-body:JSON.stringify({book_id,student_id})
-})
-
-const data=await res.json()
-
-alert(data.message)
-
-loadBooks()
-loadTransactions()
-
-}
-
-
-window.loadTransactions = async function(){
-
-const res=await fetch("/transactions/list")
-const data=await res.json()
-
-const table=document.getElementById("transactionsTableBody")
-
-table.innerHTML=""
-
-data.forEach((t,index)=>{
-
-table.innerHTML+=`
-<tr>
-<td>${index+1}</td>
-<td>${t.book_id}</td>
-<td>${t.student_id}</td>
-<td>${t.action}</td>
-<td>${t.time}</td>
-<td class="admin-only d-none">
-<button class="btn btn-danger btn-sm" onclick="deleteTransaction(${t.id})">Delete</button>
-</td>
-</tr>
-`
-})
-
-document.getElementById("statTransactions").textContent=data.length
-
-}
-
-
-window.deleteTransaction = async function(id){
-
-if(!confirm("Delete transaction?")) return
-
-await fetch("/transactions/delete/"+id,{method:"DELETE"})
-
-loadTransactions()
-
-}
-
-
-loadBooks()
-loadStudents()
-loadTransactions()
+    loadBooks()
+    loadStudents()
+    loadTransactions()
 
 })
